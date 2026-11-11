@@ -1,3 +1,5 @@
+import { withWorkflow } from "workflow/next";
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   typescript: {
@@ -18,4 +20,6 @@ const nextConfig = {
   },
 };
 
-export default nextConfig;
+// Compiles "use workflow" / "use step" directives and mounts Workflow's
+// internal routes under /.well-known/workflow.
+export default withWorkflow(nextConfig);

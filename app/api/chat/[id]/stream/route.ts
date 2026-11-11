@@ -1,13 +1,19 @@
 /**
- * This is where we'll add a route for resuming a stream for an agent chat.
- *
- * During the workshop you will wire this up in the Workflows chapter.
- *
- * Workshop docs: https://agent-foundations-certification.vercel.app/docs/workflows
+ * Reconnect to an in-progress (or finished) shopping chat run after a
+ * dropped connection or a page refresh. Never starts new work.
  */
+import { resumeChatStream } from "@/lib/chat-route";
 
-export const POST = async () =>
-  new Response(
-    "Not implemented yet — finish the chat-agent workshop step to enable this route.",
-    { status: 501 },
-  );
+export const maxDuration = 300;
+
+export async function GET(
+  request: Request,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const { id } = await params;
+  return resumeChatStream({
+    request,
+    runId: id,
+    workflowName: "shoppingChatWorkflow",
+  });
+}

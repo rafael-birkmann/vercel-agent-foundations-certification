@@ -382,6 +382,12 @@ export async function createReturn(input: CreateReturnInput): Promise<Return> {
   });
 }
 
+export async function getReturn(id: string): Promise<Return> {
+  return request<Return>(`/returns/${encodeURIComponent(id)}`, {
+    cache: "no-store",
+  });
+}
+
 export async function notifyReturnInProcess(orderId: string): Promise<void> {
   // In production this would hit your email provider.
   console.log(

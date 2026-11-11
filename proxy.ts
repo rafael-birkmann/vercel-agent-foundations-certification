@@ -14,12 +14,19 @@ export function proxy(request: NextRequest) {
     return NextResponse.next();
   }
 
+  // The admin agent API answers with 401 instead of a login redirect.
+  if (pathname.startsWith("/api/admin")) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   const url = request.nextUrl.clone();
   url.pathname = "/admin/login";
   url.search = "";
   return NextResponse.redirect(url);
 }
 
+// Only admin pages and the admin agent API. Workflow's internal routes
+// (/.well-known/workflow/*) are intentionally not matched.
 export const config = {
-  matcher: ["/admin/:path*"],
+  matcher: ["/admin/:path*", "/api/admin/:path*"],
 };

@@ -1,6 +1,7 @@
 export type OrderStatus =
   | "pending"
   | "paid"
+  | "fulfilled"
   | "shipped"
   | "delivered"
   | "cancelled";
@@ -123,6 +124,8 @@ export interface OrderItem {
   quantity: number;
   unitPrice: number;
   lineTotal: number;
+  /** Hydrated by `GET /orders/{id}`. */
+  product?: Product;
 }
 
 export interface Order {
@@ -226,9 +229,9 @@ export interface Return {
   callback: string | null;
   items: { productId: string; quantity: number }[];
   reason: string;
-  status: "pending" | "approved" | "rejected" | "processed";
+  status: BackOfficeReturnStatus | "approved" | "rejected" | "processed";
   scheduledFireAt: string;
-  decision: "approved" | "rejected" | null;
+  decision: BackOfficeReturnDecision | null;
   refundAmount: number | null;
   notes: string | null;
   createdAt: string;

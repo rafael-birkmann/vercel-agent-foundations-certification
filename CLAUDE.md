@@ -37,7 +37,7 @@ The storefront brand is **Ship It Shop** (metadata, header, homepage copy). The 
 ### Data layer (`lib/`)
 
 - `lib/types.ts` — pure type module re-exporting the API schemas (`Product`, `CartWithProducts`, `CartItemWithProduct`, `Promotion`, `Category`, `StockInfo`, `StoreConfig`). Both server and client modules import from here. Also exports the `CATEGORY_SLUGS` const tuple used by the category filter.
-- `lib/api.ts` — typed `fetch` wrapper. Functions: `getProducts`, `getProductById`, `getProductStock`, `getCategories`, `getPromotion`, `getStoreConfig`, `cartCreate`, `cartGet`, `cartAdd`, `cartUpdate`, `cartRemove`. **Server-only** by convention (reads `process.env.VERCEL_PROTECTION_BYPASS_SECRET`). Throws `ApiRequestError` on non-200/`success:false` responses.
+- `lib/api.ts` — typed `fetch` wrapper. Functions: `getProducts`, `getProductById`, `getProductStock`, `getCategories`, `getPromotion`, `getStoreConfig`, `cartCreate`, `cartGet`, `cartAdd`, `cartUpdate`, `cartRemove`. **Server-only** by convention (reads `process.env.BYPASS_SECRET`). Throws `ApiRequestError` on non-200/`success:false` responses.
 - `lib/cart-token.ts` — `getOrCreateCartToken()`/`getCartToken()`/`clearCartToken()` using `next/headers`. Stores the API-issued cart UUID in an `httpOnly` cookie `cart_token` with a 30-day max-age.
 - `lib/cart-actions.ts` — `'use server'` actions: `getCartAction`, `addToCartAction`, `updateCartItemAction`, `removeCartItemAction`, `getProductStockAction`. Each cart mutation calls the API and `revalidateTag('cart')`. The first add lazily creates the cart on the server.
 - `lib/format.ts` — `formatPrice(cents, currency)` using `Intl.NumberFormat`. **API prices are integers in cents**, so always pass them through this helper.
@@ -77,5 +77,25 @@ Everything else (`Header`, `Footer`, `ProductCard`, `ProductGrid`, `PromoBanner`
 
 - `next.config.mjs` keeps `typescript.ignoreBuildErrors: true` and `images.unoptimized: true`. `images.remotePatterns` is whitelisted for `**.public.blob.vercel-storage.com` and `**.vercel-storage.com` (where API product images live); add hostnames here if the API ever returns images from a new domain.
 - `@vercel/analytics` only mounts when `NODE_ENV === 'production'` (see `app/layout.tsx`).
-- The repo is linked to v0 (`https://v0.app/chat/projects/prj_X7UGePkFlLC33RuxWiTZySFDcSzO`); merges to `main` auto-deploy via Vercel. v0 may push commits directly. When deploying, set `VERCEL_PROTECTION_BYPASS_SECRET` in the Vercel project's environment variables.
+- The repo is linked to v0 (`https://v0.app/chat/projects/prj_X7UGePkFlLC33RuxWiTZySFDcSzO`); merges to `main` auto-deploy via Vercel. v0 may push commits directly. When deploying, set `BYPASS_SECRET` in the Vercel project's environment variables.
 - The root layout is intentionally synchronous so it doesn't opt routes out of static. `pnpm build` should report `/` as `○` (Static), `/products/[param]` as `●` (SSG), and `/search` as `ƒ` (Dynamic). If you ever convert the layout to `async function` and `await` something that uses `cookies()`/`headers()`/`searchParams`, you will silently switch every route back to dynamic — verify the build output after layout changes.
+
+### Agents (see README for the full write-up)
+
+- Two separate agents: shopping (`/api/chat`, `lib/tools.ts`, `lib/workflows/chat-flow.ts`) and store admin (`/api/admin/chat`, `lib/admin-tools.ts`, `lib/workflows/admin-chat-flow.ts`). Never import admin tools/sandbox into the shopping side.
+- Each chat turn = one Workflow SDK run using `WorkflowAgent` from `@ai-sdk/workflow` (AI SDK 7; `@workflow/ai` is the v6 package — don't use it). Tool `execute` functions are `"use step"`. Shared POST/resume logic lives in `lib/chat-route.ts`; resume endpoints replay the raw stream from 0 with `uiStartIndex`.
+- Client components must import `WorkflowChatTransport` from `@ai-sdk/workflow/client` — the root entry pulls the server runtime into the browser bundle and breaks the build.
+- Workflow functions run in a restricted VM: no Node modules or global fetch there; put I/O in steps. Keep pure constants (e.g. `lib/sandbox-paths.ts`) separate from Node-only modules.
+- Admin sandbox (`lib/sandbox.ts`): one named persistent Vercel Sandbox, `deny-all` network, holds `memory/MEMORY.md` and `data/*.json`. Memory is read by a workflow step at the start of each admin run.
+- Admin cookie path is `/` so it reaches `/api/admin/*`; `proxy.ts` matches `/admin/:path*` and `/api/admin/:path*` (never `/.well-known/workflow`).
+- Inspect runs locally with `npx workflow web` / `pnpm exec workflow inspect steps --runId <id>`.
+
+<!-- BEGIN:nextjs-agent-rules -->
+
+# This is NOT the Next.js you know
+
+This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` (resolved from this file's directory; in monorepos the `next` package may not be visible from the repo root) before writing any code. Heed deprecation notices.
+
+This block is written and re-added by `next dev` — verify at `node_modules/next/dist/server/lib/generate-agent-files.js`. Removing it from a diff only re-creates the uncommitted change; committing it with your work keeps the tree clean.
+
+<!-- END:nextjs-agent-rules -->

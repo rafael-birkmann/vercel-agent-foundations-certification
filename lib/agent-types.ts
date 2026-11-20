@@ -86,6 +86,20 @@ export type ReturnOrderResult =
     }
   | (ToolFailure & { orderStatus?: string; returnRequestId?: string });
 
+/** Stream namespace the return workflow publishes "filed" progress on. */
+export const RETURN_PROGRESS_NAMESPACE = "progress";
+
+/** Live state of a background return, served by GET /api/returns/[runId]. */
+export interface ReturnProgress {
+  stage: "running" | "awaiting_decision" | "completed" | "failed";
+  returnId: string | null;
+  decision: "approved" | "rejected" | "needs_info" | null;
+  /** Cents. */
+  refundAmount: number | null;
+  currency: string | null;
+  notes: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // Admin agent
 // ---------------------------------------------------------------------------

@@ -2,15 +2,23 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useState } from "react";
-import { CheckCircle2, PackageCheck, ShoppingCart } from "lucide-react";
+import { useEffect, useState } from "react";
+import {
+  CheckCircle2,
+  Clock,
+  Loader2,
+  PackageCheck,
+  ShoppingCart,
+  XCircle,
+} from "lucide-react";
 import type { InferUITools, UIMessage, UIToolInvocation } from "ai";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useCart } from "@/components/cart-provider";
 import { cn } from "@/lib/utils";
 import type { ShoppingTools } from "@/lib/tools";
-import type { ProductSummary } from "@/lib/agent-types";
+import type { ProductSummary, ReturnProgress } from "@/lib/agent-types";
+import { formatPrice } from "@/lib/format";
 import { ToolNotice, WorkingIndicator } from "./chat-common";
 
 type Inv<K extends keyof ShoppingTools> = UIToolInvocation<ShoppingTools[K]>;
@@ -387,7 +395,177 @@ export function ReturnOrderPart({ part }: { part: Inv<"returnOrder"> }) {
         <dt className="text-muted-foreground">Confirmation to</dt>
         <dd>{result.notifyEmail}</dd>
       </dl>
-      <p className="text-xs text-muted-foreground">{result.nextSteps}</p>
+      <ReturnProgressLine runId={result.returnRequestId} />
     </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Live return progress (polls GET /api/returns/[runId])
+// ---------------------------------------------------------------------------
+
+const POLL_MS = 5_000;
+const MAX_POLL_MS = 10 * 60 * 1000;
+const MAX_ERRORS = 5;
+
+type ProgressState =
+  | { kind: "loading" }
+  | { kind: "live"; progress: ReturnProgress }
+  | { kind: "unavailable" };
+
+function useReturnProgress(runId: string): ProgressState {
+  const [state, setState] = useState<ProgressState>({ kind: "loading" });
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const startedAt = Date.now();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let errors = 0;
+
+    const next = (delay: number) => {
+      timer = setTimeout(poll, delay);
+    };
+
+    async function poll() {
+      if (Date.now() - startedAt > MAX_POLL_MS) {
+        setState((s) => (s.kind === "live" ? s : { kind: "unavailable" }));
+        return;
+      }
+      if (document.visibilityState === "hidden") return next(POLL_MS);
+      try {
+        const res = await fetch(`/api/returns/${encodeURIComponent(runId)}`, {
+          signal: controller.signal,
+          cache: "no-store",
+        });
+        if (!res.ok) throw new Error(`status ${res.status}`);
+        const progress = (await res.json()) as ReturnProgress;
+        errors = 0;
+        setState({ kind: "live", progress });
+        if (progress.stage !== "completed" && progress.stage !== "failed") {
+          next(POLL_MS);
+        }
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        errors += 1;
+        if (errors >= MAX_ERRORS) {
+          setState((s) => (s.kind === "live" ? s : { kind: "unavailable" }));
+          return;
+        }
+        next(Math.min(POLL_MS * 2 ** errors, 30_000));
+      }
+    }
+
+    next(0);
+    return () => {
+      controller.abort();
+      if (timer) clearTimeout(timer);
+    };
+  }, [runId]);
+
+  return state;
+}
+
+function describeProgress(state: ProgressState): {
+  text: string;
+  tone: "neutral" | "good" | "bad";
+  busy: boolean;
+} {
+  if (state.kind === "loading") {
+    return { text: "Checking return status…", tone: "neutral", busy: true };
+  }
+  if (state.kind === "unavailable") {
+    return {
+      text: "Can't check the status right now. Ask me again in a few minutes.",
+      tone: "neutral",
+      busy: false,
+    };
+  }
+  const p = state.progress;
+  switch (p.stage) {
+    case "running":
+      return {
+        text: "Notifying you and pre-authorizing the refund…",
+        tone: "neutral",
+        busy: true,
+      };
+    case "awaiting_decision":
+      return {
+        text: "Submitted to the store. Waiting for a decision (usually under a minute).",
+        tone: "neutral",
+        busy: true,
+      };
+    case "failed":
+      return {
+        text: "We couldn't finish this return automatically. Please contact support with your order number.",
+        tone: "bad",
+        busy: false,
+      };
+    case "completed":
+      if (p.decision === "approved") {
+        const amount =
+          p.refundAmount != null && p.currency
+            ? ` Refund: ${formatPrice(p.refundAmount, p.currency)}.`
+            : "";
+        return { text: `Approved.${amount}`, tone: "good", busy: false };
+      }
+      if (p.decision === "rejected") {
+        return {
+          text: `Rejected. No refund will be issued.${p.notes ? ` ${p.notes}` : ""}`,
+          tone: "bad",
+          busy: false,
+        };
+      }
+      if (p.decision === "needs_info") {
+        return {
+          text: `The store needs more information.${p.notes ? ` ${p.notes}` : ""}`,
+          tone: "neutral",
+          busy: false,
+        };
+      }
+      return {
+        text: "Still under review. You'll get an email with the decision.",
+        tone: "neutral",
+        busy: false,
+      };
+  }
+}
+
+function ReturnProgressLine({ runId }: { runId: string }) {
+  const state = useReturnProgress(runId);
+  const { text, tone, busy } = describeProgress(state);
+  const returnId = state.kind === "live" ? state.progress.returnId : null;
+
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className={cn(
+        "flex items-start gap-2 border-t border-emerald-500/20 pt-2 text-xs",
+        tone === "good" && "text-emerald-700 dark:text-emerald-400",
+        tone === "bad" && "text-destructive",
+        tone === "neutral" && "text-muted-foreground",
+      )}
+    >
+      {busy ? (
+        <Loader2
+          className="mt-0.5 size-3.5 shrink-0 animate-spin motion-reduce:animate-none"
+          aria-hidden="true"
+        />
+      ) : tone === "good" ? (
+        <CheckCircle2 className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+      ) : tone === "bad" ? (
+        <XCircle className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+      ) : (
+        <Clock className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+      )}
+      <span>
+        {text}
+        {returnId ? (
+          <span className="block text-muted-foreground">
+            Return reference: {returnId}
+          </span>
+        ) : null}
+      </span>
+    </div>
   );
 }

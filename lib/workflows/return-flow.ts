@@ -14,6 +14,7 @@ import {
   FatalError,
   createWebhook,
   getStepMetadata,
+  getWritable,
   sleep,
 } from "workflow";
 import {
@@ -25,6 +26,7 @@ import {
   preauthorizeRefund,
 } from "../api";
 import type { Return } from "../types";
+import { RETURN_PROGRESS_NAMESPACE } from "../agent-types";
 
 export interface ReturnOrderInput {
   orderId: string;
@@ -76,6 +78,21 @@ async function preauthorize(orderId: string) {
   }
 }
 
+/**
+ * The webhook URL is built from VERCEL_URL (the per-deployment host), which
+ * Vercel Authentication protects, so the store's callback would get a 401 in
+ * production. Use the public production domain there instead. Previews and
+ * local runs keep the original URL (and fall back to polling).
+ */
+function publicCallbackUrl(callback: string): string {
+  const host = process.env.VERCEL_PROJECT_PRODUCTION_URL;
+  if (process.env.VERCEL_ENV !== "production" || !host) return callback;
+  const url = new URL(callback);
+  url.protocol = "https:";
+  url.host = host;
+  return url.toString();
+}
+
 async function fileReturn(input: ReturnOrderInput & { callback: string }) {
   "use step";
   // Opt-in failure injection to demonstrate retries without repeated side
@@ -90,7 +107,7 @@ async function fileReturn(input: ReturnOrderInput & { callback: string }) {
       orderId: input.orderId,
       items: input.items,
       reason: input.reason,
-      callback: input.callback,
+      callback: publicCallbackUrl(input.callback),
     });
     return pickReturn(ret);
   } catch (error) {
@@ -104,6 +121,23 @@ async function fileReturn(input: ReturnOrderInput & { callback: string }) {
   }
 }
 fileReturn.maxRetries = 5;
+
+/**
+ * Publish the store's return id on the run's "progress" stream, so
+ * GET /api/returns/[runId] can show "waiting for a decision" while the run is
+ * still going.
+ */
+async function publishFiled(returnId: string) {
+  "use step";
+  const writer = getWritable<{ returnId: string }>({
+    namespace: RETURN_PROGRESS_NAMESPACE,
+  }).getWriter();
+  try {
+    await writer.write({ returnId });
+  } finally {
+    writer.releaseLock();
+  }
+}
 
 /** Re-read the return from the API (never trust the webhook body itself). */
 async function fetchReturnStatus(returnId: string) {
@@ -147,6 +181,7 @@ export async function returnOrderWorkflow(input: ReturnOrderInput) {
   await webhook.getConflict();
 
   const filed = await fileReturn({ ...input, callback: webhook.url });
+  await publishFiled(filed.id);
 
   // Wait for the decision callback (usually 15–60s), but don't rely on it:
   // locally the API can't reach a localhost callback URL, so fall back to
@@ -175,5 +210,11 @@ export async function returnOrderWorkflow(input: ReturnOrderInput) {
     status: latest.status,
     decision: latest.decision,
     refundAmount: latest.refundAmount,
+    currency: order.currency,
+    notes: latest.notes,
   };
 }
+
+export type ReturnOrderWorkflowResult = Awaited<
+  ReturnType<typeof returnOrderWorkflow>
+>;
